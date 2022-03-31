@@ -115,9 +115,9 @@ if freq_subday_type is not in (0, 1, 2, 4, 8)
 	set time = null
 if now < active_start_time
 	set time = active_start_time, today = true
-if now > active_and_time
+if now > active_end_time
 	set time = active_start_time, today = false
-if now >= active_start_time and now <= active_and_time
+if now >= active_start_time and now <= active_end_time
 	if freq_subday_type = 1
 		set time = active_start_time, today = false
 	if freq_subday_type = 2
@@ -181,14 +181,15 @@ if freq_type = 16 (monthly) =>
 	while (date < today && date < active_end_date) set month(date) = month(date) + freq_recurrence_factor
 	if (date < active_end_date) then return date else return null
 if freq_type = 32 (monthly relative) =>
-	while (date < active_end_date)
-		set year = year(date)
-		set month = month(date)
-		set day = first/second/third/fourth/last (freq_relative_interval) mo/tu/we/th/fr/sa/su/day/weekday/weekendday (freq_interval) of month/year
-		if (date == today) return date
-		set month(date) = month(date) + freq_recurrence_factor ; set year accordingly
-	end
-	return null;
+	first do for last
+		set date = last date of the month
+		decrement until last su/mo/tu/fr/sa/sun/weekday/weekend day is found
+	then do for first
+		set date = first date of the month
+		increment until first su/mo/tu/fr/sa/sun/weekday/weekend day is found
+	for second, third and fourth
+		start with date set for first
+		increment by 7 (su/mo/tu/fr/sa/sun), by 1 (weekday), by 7 or 6 if first is sunday (weekend day)
 
 */
 
