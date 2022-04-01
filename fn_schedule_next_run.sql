@@ -235,7 +235,7 @@ if freq_type = 32 (monthly relative) =>
 	DECLARE @Minutes INT
 	DECLARE @Hours INT
 
-	IF (@freq_subday_type NOT IN (0, 1, 2, 4, 8) OR @freq_subday_interval < 0 OR @freq_subday_interval > 100) BEGIN
+	IF (@freq_subday_type NOT IN (0, 1, 2, 4, 8) OR @freq_subday_interval < 0) BEGIN
 		SET @NextTime = NULL
 		SET @ForToday = 1
 	END
