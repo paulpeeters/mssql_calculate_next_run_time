@@ -382,7 +382,7 @@ if freq_type = 32 (monthly relative) =>
 		END
 		WHILE (@RunningDate < @EndDate) BEGIN
 			SET @NextWeekDate = DATEADD(DAY, 8, @RunningDate)
-			WHILE (@RunningDate < @NextWeekDate AND 0 = (POWER(2, DATEPART(WEEKDAY, @RunningDate - 1)) & @freq_interval)) SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
+			WHILE (@RunningDate < @NextWeekDate AND 0 = (POWER(2, DATEPART(WEEKDAY, @RunningDate) - 1) & @freq_interval)) SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
 			IF (@RunningDate < @NextWeekDate) BEGIN
 				SET @NextDate = @RunningDate
 				GOTO DONE
