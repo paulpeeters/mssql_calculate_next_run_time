@@ -1,16 +1,16 @@
-CREATE FUNCTION [fn_schedule_next_run]
+ALTER FUNCTION [dbo].[fn_schedule_next_run]
 (
-	@schedule_id int
+	@schedule_id int,
+	@from_msdb bit = 0
 )
 RETURNS DATETIME
 AS
 BEGIN
-
 /*
-This will calculate and return the next rundate/time for any schedule in [msdb].[dbo].[sysschedules].
-If there is no next rundate/time, the function returns NULL
+This will calculate and return the next rundate/time for any schedule in [msdb].[dbo].[sysschedules] (@from_msdb = 1)
+or from local table [schedule] (@from_msdb = 0). If there is no next rundate/time, the function returns NULL.
 
-The fields in [msdb].[dbo].[sysschedules] are defined as follows 
+The fields in [msdb].[dbo].[sysschedules] (and the local table [schedule]) are defined as follows 
 (as seen on https://docs.microsoft.com/en-us/sql/relational-databases/system-tables/dbo-sysschedules-transact-sql?view=sql-server-ver15) 
 
 freq_type - int
@@ -115,9 +115,9 @@ if freq_subday_type is not in (0, 1, 2, 4, 8)
 	set time = null
 if now < active_start_time
 	set time = active_start_time, today = true
-if now > active_end_time
+if now > active_and_time
 	set time = active_start_time, today = false
-if now >= active_start_time and now <= active_end_time
+if now >= active_start_time and now <= active_and_time
 	if freq_subday_type = 1
 		set time = active_start_time, today = false
 	if freq_subday_type = 2
@@ -181,15 +181,14 @@ if freq_type = 16 (monthly) =>
 	while (date < today && date < active_end_date) set month(date) = month(date) + freq_recurrence_factor
 	if (date < active_end_date) then return date else return null
 if freq_type = 32 (monthly relative) =>
-	first do for last
-		set date = last date of the month
-		decrement until last su/mo/tu/fr/sa/sun/weekday/weekend day is found
-	then do for first
-		set date = first date of the month
-		increment until first su/mo/tu/fr/sa/sun/weekday/weekend day is found
-	for second, third and fourth
-		start with date set for first
-		increment by 7 (su/mo/tu/fr/sa/sun), by 1 (weekday), by 7 or 6 if first is sunday (weekend day)
+	while (date < active_end_date)
+		set year = year(date)
+		set month = month(date)
+		set day = first/second/third/fourth/last (freq_relative_interval) mo/tu/we/th/fr/sa/su/day/weekday/weekendday (freq_interval) of month/year
+		if (date == today) return date
+		set month(date) = month(date) + freq_recurrence_factor ; set year accordingly
+	end
+	return null;
 
 */
 
@@ -205,21 +204,40 @@ if freq_type = 32 (monthly relative) =>
 		@active_start_time int,
 		@active_end_time int;
 
-	SELECT
-		@freq_type = [freq_type],
-		@freq_interval = [freq_interval],
-		@freq_subday_type = [freq_subday_type],
-		@freq_subday_interval = [freq_subday_interval],
-		@freq_relative_interval = [freq_relative_interval],
-		@freq_recurrence_factor = [freq_recurrence_factor],
-		@active_start_date = [active_start_date],
-		@active_end_date = [active_end_date],
-		@active_start_time = [active_start_time],
-		@active_end_time = [active_end_time]
-	FROM 
-		[msdb].[dbo].[sysschedules]
-	WHERE
-		[schedule_id] = @schedule_id
+	IF (@from_msdb = 1) BEGIN
+		SELECT
+			@freq_type = [freq_type],
+			@freq_interval = [freq_interval],
+			@freq_subday_type = [freq_subday_type],
+			@freq_subday_interval = [freq_subday_interval],
+			@freq_relative_interval = [freq_relative_interval],
+			@freq_recurrence_factor = [freq_recurrence_factor],
+			@active_start_date = [active_start_date],
+			@active_end_date = [active_end_date],
+			@active_start_time = [active_start_time],
+			@active_end_time = [active_end_time]
+		FROM 
+			[msdb].[dbo].[sysschedules]
+		WHERE
+			[schedule_id] = @schedule_id
+	END
+	ELSE BEGIN
+		SELECT
+			@freq_type = [freq_type],
+			@freq_interval = [freq_interval],
+			@freq_subday_type = [freq_subday_type],
+			@freq_subday_interval = [freq_subday_interval],
+			@freq_relative_interval = [freq_relative_interval],
+			@freq_recurrence_factor = [freq_recurrence_factor],
+			@active_start_date = [active_start_date],
+			@active_end_date = [active_end_date],
+			@active_start_time = [active_start_time],
+			@active_end_time = [active_end_time]
+		FROM 
+			[dbo].[schedule]
+		WHERE
+			[schedule_id] = @schedule_id
+	END
 
 	-- 'AT TIME ZONE' since SQL Server 2016
 	DECLARE @CurrentDate DATE = GETUTCDATE() AT TIME ZONE 'UTC' AT TIME ZONE 'W. Europe Standard Time'
@@ -343,7 +361,6 @@ if freq_type = 32 (monthly relative) =>
 	DECLARE @Today DATE = @NextTime
 	DECLARE @RunningDate DATE = @NextTime
 	DECLARE @NextDate DATE = NULL
-	DECLARE @NextWeekDate DATE
 	DECLARE @Year INT
 	DECLARE @Month INT
 	DECLARE @Weekday INT
@@ -377,30 +394,121 @@ if freq_type = 32 (monthly relative) =>
 
 	IF (@freq_type = 8) BEGIN
 		-- 8 = Weekly
-		WHILE (@RunningDate < @Today AND @RunningDate < @EndDate) BEGIN
-			SET @RunningDate = DATEADD(DAY, 7 * @freq_recurrence_factor, @RunningDate)
+		DECLARE @WhichWeekdays INT = @freq_interval
+		DECLARE @EveryXWeeks INT = @freq_recurrence_factor
+		DECLARE @NextWeekDate DATE
+
+		IF ((@WhichWeekdays & 127) = 0) BEGIN
+			-- if no day  of the week selected, allow any day of the week
+			SET @WhichWeekdays = 127
+		END
+		IF (@EveryXWeeks <= 0) BEGIN
+			-- if "occurs every x week" is not set, set "occurs every week"
+			SET @EveryXWeeks = 1
+		END
+		IF (@StartDate > @Today) BEGIN
+			SET @NextWeekDate = @StartDate
+		END
+		ELSE BEGIN
+			-- set the starting week to the week of @Today
+			SET @NextWeekDate = DATEADD(DAY, 7 * DATEDIFF(DAY, @StartDate, @Today) / (7 * @EveryXWeeks), @StartDate)
+		END
+		SET @RunningDate = @NextWeekDate
+		IF (DATEDIFF(DAY, @RunningDate, @Today) > 6) BEGIN
+			SET @NextWeekDate = DATEADD(DAY, (7 * @EveryXWeeks), @NextWeekDate)
+			SET @RunningDate = @NextWeekDate
+		END
+		ELSE BEGIN
+			WHILE (@RunningDate < @Today) BEGIN
+				SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
+			END
+		END
+		IF (@RunningDate >= @Today AND @RunningDate < @EndDate AND (0 <> (POWER(2, DATEPART(WEEKDAY, @RunningDate) - 1) & @WhichWeekdays))) BEGIN
+			SET @NextDate = @RunningDate
+			GOTO DONE
 		END
 		WHILE (@RunningDate < @EndDate) BEGIN
-			SET @NextWeekDate = DATEADD(DAY, 8, @RunningDate)
-			WHILE (@RunningDate < @NextWeekDate AND 0 = (POWER(2, DATEPART(WEEKDAY, @RunningDate) - 1) & @freq_interval)) SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
-			IF (@RunningDate < @NextWeekDate) BEGIN
-				SET @NextDate = @RunningDate
-				GOTO DONE
+			IF (DATEDIFF(DAY, @NextWeekDate, @RunningDate) >= 7) BEGIN
+				SET @NextWeekDate = DATEADD(DAY, (7 * @EveryXWeeks), @NextWeekDate)
+				SET @RunningDate = @NextWeekDate
 			END
-			SET @RunningDate = DATEADD(DAY, 7 * @freq_recurrence_factor, DATEADD(DAY, -8, @NextWeekDate))
+			ELSE BEGIN
+				WHILE (DATEDIFF(DAY, @NextWeekDate, @RunningDate) < 7) BEGIN
+					IF (@RunningDate < @EndDate AND (0 <> (POWER(2, DATEPART(WEEKDAY, @RunningDate) - 1) & @WhichWeekdays))) BEGIN
+						SET @NextDate = @RunningDate
+						GOTO DONE
+					END
+					SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
+				END
+			END
 		END
 		GOTO DONE
 	END
 
 	IF (@freq_type = 16) BEGIN
 		-- 16 = Monthly
-		WHILE (DATEPART(DAY, @RunningDate) < @freq_interval AND @RunningDate < @EndDate) BEGIN
-			SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
+		DECLARE @DayOfTheMonth INT = @freq_interval
+		DECLARE @EveryXMonths INT = @freq_recurrence_factor
+		DECLARE @NextMonthDate DATE
+		IF (@DayOfTheMonth > 31) BEGIN
+			GOTO DONE
 		END
-		WHILE (@RunningDate < @Today AND @RunningDate < @EndDate) BEGIN
-			SET @RunningDate = DATEADD(MONTH, @freq_recurrence_factor, @RunningDate)
+		IF (@StartDate > @Today) BEGIN
+			SET @NextMonthDate = DATEADD(DAY, 1 - DATEPART(DAY, @StartDate), @StartDate)
 		END
-		SET @NextDate = CASE WHEN (@RunningDate < @EndDate) THEN @RunningDate ELSE NULL END
+		ELSE BEGIN
+			-- set the next month date (is nearest 1st to today of month
+			SET @NextMonthDate = DATEADD(
+				MONTH, 
+				@EveryXMonths 
+					* (DATEDIFF(MONTH, 
+						DATEADD(DAY, 1 - DATEPART(DAY, @StartDate), @StartDate), 
+						DATEADD(DAY, 1 - DATEPART(DAY, @Today), @Today)) 
+						/ @EveryXMonths), 
+				DATEADD(DAY, 1 - DATEPART(DAY, @StartDate), @StartDate))
+		END
+		SET @RunningDate = @NextMonthDate
+		WHILE (DATEADD(MONTH, 1, @NextMonthDate) < @Today) BEGIN
+			SET @NextMonthDate = DATEADD(MONTH, @EveryXMonths, @NextMonthDate)
+			SET @RunningDate = @NextMonthDate
+		END
+		-- to avoid an endless loop for the below special cases of schedules, we need to count the maximum number of months
+		--		- @DayOfTheMonth = 30 or 31 
+		--		- @StartDate somewhere in february
+		--		- @EveryXMonths = 12
+		-- or also 
+		--		- @DayOfTheMonth = 31 
+		--		- @StartDate somewhere in a month with 30 days
+		--		- @EveryXMonths = 12
+		DECLARE @MaxMonths INT = 48
+		IF (DATEPART(DAY, @RunningDate) <> @DayOfTheMonth) BEGIN
+			WHILE (DATEPART(DAY, @RunningDate) < @DayOfTheMonth AND @RunningDate < @EndDate AND @MaxMonths > 0) BEGIN
+				IF (DATEPART(DAY, DATEADD(DAY, 1, @RunningDate)) <> 1) BEGIN
+					-- we are stil in same month
+					SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
+				END
+				ELSE BEGIN
+					-- we passed to the next month
+					SET @NextMonthDate = DATEADD(MONTH, @EveryXMonths, @NextMonthDate)
+					SET @RunningDate = @NextMonthDate
+					SET @MaxMonths = @MaxMonths - @EveryXMonths
+				END
+			END
+		END
+		SET @MaxMonths = 48
+		WHILE (DATEPART(DAY, @RunningDate) < @DayOfTheMonth AND @RunningDate < @EndDate AND @MaxMonths > 0) BEGIN
+			IF (DATEPART(DAY, DATEADD(DAY, 1, @RunningDate)) <> 1) BEGIN
+				SET @RunningDate = DATEADD(DAY, 1, @RunningDate)
+			END
+			ELSE BEGIN
+				SET @NextMonthDate = DATEADD(MONTH, @EveryXMonths, @NextMonthDate)
+				SET @RunningDate = @NextMonthDate
+				SET @MaxMonths = @MaxMonths - @EveryXMonths
+			END
+		END
+		IF (DATEPART(DAY, @RunningDate) = @DayOfTheMonth ) BEGIN
+			SET @NextDate = @RunningDate
+		END
 		GOTO DONE
 	END
 
@@ -499,7 +607,7 @@ if freq_type = 32 (monthly relative) =>
 						WHILE (@Count <= @freq_relative_interval) BEGIN
 							-- add 7 days for next weekend unless we are Sunday where we need to add 6 days to have the Saturday of the next weekend 
 							SET @RunningDate = DATEADD(DAY, CASE WHEN DATEPART(WEEKDAY, @RunningDate) = 7 THEN 6 ELSE 7 END, @RunningDate)
-							SET @Count = @Count + 1
+							SET @Count = @Count - 1
 						END
 					END
 				END
@@ -523,4 +631,3 @@ DONE:
 
 	RETURN CAST(@NextDate AS DATETIME) + CAST(CAST(@NextTime AS TIME) AS DATETIME)
 END
-GO
