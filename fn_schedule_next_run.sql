@@ -366,7 +366,6 @@ if freq_type = 32 (monthly relative) =>
 		GOTO DONE
 	END
 
-	SET @RunningDate = @StartDate
 	IF (@freq_type = 1) BEGIN
 		-- 1 = One time only
 		SET @NextDate = CASE WHEN (@RunningDate = @Today) THEN @RunningDate ELSE NULL END
@@ -377,6 +376,7 @@ if freq_type = 32 (monthly relative) =>
 		GOTO DONE
 	END
 
+	SET @RunningDate = @StartDate
 	IF (@freq_type = 4) BEGIN
 		-- 4 = Daily
 		IF (@RunningDate = @Today) BEGIN
